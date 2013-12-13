@@ -630,6 +630,10 @@ public:
     }
 
   */
+  
+  // the following method has changed by HOLGER
+  
+  /*
     bool LocateClosestEndPointForCoordinate(
             const FixedPointCoordinate & input_coordinate,
             FixedPointCoordinate & result_coordinate,
@@ -735,8 +739,119 @@ public:
 
         return found_a_nearest_edge;
     }
+*/
+// changed method by HOLGER
+    bool LocateClosestEndPointForCoordinate(
+            const FixedPointCoordinate & input_coordinate,
+            FixedPointCoordinate & result_coordinate,
+            const unsigned zoom_level
+    ) {
+	    // first check that the coordinates are contained in the area for which we have nodes; if not return 0
+	    if (!m_search_tree[0].minimum_bounding_rectangle.Contains(input_coordinate)) {
+		    return 0;
+	    }  	// if it is contained carry on 
+	    
+        bool ignore_tiny_components = false;
 
+        DataT nearest_edge;
+        // min_max_dist represents the best minimal second edge of the closest rectangle
+        // this is a upper bound for the best possible node found so far
+        double min_max_dist;
+        bool found_a_nearest_edge = false;
 
+        //initialize queue with root element
+        std::priority_queue<QueryCandidate> traversal_queue;
+        double current_min_dist = m_search_tree[0].minimum_bounding_rectangle.GetMinDist(input_coordinate);
+        min_max_dist=m_search_tree[0].minimum_bounding_rectangle.GetMinMaxDist(input_coordinate);
+        // the top element
+        traversal_queue.push(
+                             QueryCandidate(0, current_min_dist)
+        );
+
+        BOOST_ASSERT_MSG(
+            std::numeric_limits<double>::epsilon() > (0. - traversal_queue.top().min_dist),
+            "Root element in NN Search has min dist != 0."
+        );
+
+        while(!traversal_queue.empty()) {
+            const QueryCandidate current_query_node = traversal_queue.top();
+            traversal_queue.pop();
+
+	        //only analyse the node (going down in the tree) if it icludes the point or its min_dist is closer than the 
+	        // best possible value we have found so far in the worst case (min_max_dist)
+            if(current_query_node.min_dist < min_max_dist) { 
+                TreeNode & current_tree_node = m_search_tree[current_query_node.node_id];
+                 //if the node is a leaf compare all its edges to find the closest one
+                if (current_tree_node.child_is_on_disk) {
+                    LeafNode current_leaf_node;
+                    LoadLeafFromDisk(
+                        current_tree_node.children[0],
+                        current_leaf_node
+                    );
+                    for(uint32_t i = 0; i < current_leaf_node.object_count; ++i) {
+                        const DataT & current_edge = current_leaf_node.objects[i];
+                        if(ignore_tiny_components && current_edge.belongsToTinyComponent) {
+                            continue;
+                        }
+                        if(current_edge.isIgnored()) {
+                            continue;
+                        }
+
+                        double current_minimum_distance = ApproximateDistance(
+                                input_coordinate.lat,
+                                input_coordinate.lon,
+                                current_edge.lat1,
+                                current_edge.lon1
+                            );
+                        if( current_minimum_distance < min_max_dist ) {
+                            //found a new minimum
+                            min_max_dist = current_minimum_distance;
+                            result_coordinate.lat = current_edge.lat1;
+                            result_coordinate.lon = current_edge.lon1;
+                            found_a_nearest_edge = true;
+                        }
+
+                        current_minimum_distance = ApproximateDistance(
+                                input_coordinate.lat,
+                                input_coordinate.lon,
+                                current_edge.lat2,
+                                current_edge.lon2
+                            );
+
+                        if( current_minimum_distance < min_max_dist ) {
+                            //found a new minimum
+                            min_max_dist = current_minimum_distance;
+                            result_coordinate.lat = current_edge.lat2;
+                            result_coordinate.lon = current_edge.lon2;
+                            found_a_nearest_edge = true;
+                        }
+                    }
+                } else {
+                     //traverse children, prune if the upper bound for the best node found so far (min_max_dist) is smaller than local mindist
+                    for (uint32_t i = 0; i < current_tree_node.child_count; ++i) {
+                        const int32_t child_id = current_tree_node.children[i];
+                        const TreeNode & child_tree_node = m_search_tree[child_id];
+                        const RectangleT & child_rectangle = child_tree_node.minimum_bounding_rectangle;
+                        const double current_min_dist = child_rectangle.GetMinDist(input_coordinate);
+                        const double current_min_max_dist = child_rectangle.GetMinMaxDist(input_coordinate);
+
+ 						// the child is a candidate if it either includes the coordinate or its min dist is closer than the 
+ 						// best upper bound we have so far 
+                        if(current_min_dist < min_max_dist ) {
+                        	min_max_dist = current_min_max_dist;
+                         	traversal_queue.push(QueryCandidate(child_id, current_min_dist));
+                        }
+                    }
+                }
+            }
+        }
+
+        return found_a_nearest_edge;
+    }
+
+// end changed method HOLGER
+// the following method has been changed by HOLGER
+/*
     bool FindPhantomNodeForCoordinate(
             const FixedPointCoordinate & input_coordinate,
             PhantomNode & result_phantom_node,
@@ -887,6 +1002,177 @@ public:
         return found_a_nearest_edge;
 
     }
+    
+     */
+    //start the new method by HOLGER
+
+    bool FindPhantomNodeForCoordinate(
+            const FixedPointCoordinate & input_coordinate,
+            PhantomNode & result_phantom_node,
+            const unsigned zoom_level
+    ) {
+
+	// first check that the coordinates are contained in the area for which we have nodes; if not return 0
+	if (!m_search_tree[0].minimum_bounding_rectangle.Contains(input_coordinate)) {
+		return 0;
+	}
+	
+	// if it is contained carry on 
+        bool ignore_tiny_components = false;
+   
+        DataT nearest_edge;
+
+        // min_max_dist represents the best minimal second edge of the closest rectangle
+        // this is a upper bound for the best possible node found so far
+        double min_max_dist;
+        bool found_a_nearest_edge = false;
+
+        FixedPointCoordinate nearest, current_start_coordinate, current_end_coordinate;
+
+        //initialize queue with root element
+        std::priority_queue<QueryCandidate> traversal_queue;
+        double current_min_dist = m_search_tree[0].minimum_bounding_rectangle.GetMinDist(input_coordinate);
+        min_max_dist=m_search_tree[0].minimum_bounding_rectangle.GetMinMaxDist(input_coordinate);
+        // the top element
+        traversal_queue.push(
+                             QueryCandidate(0, current_min_dist)
+        );
+
+        BOOST_ASSERT_MSG(
+            std::numeric_limits<double>::epsilon() > (0. - traversal_queue.top().min_dist),
+            "Root element in NN Search has min dist != 0."
+        );
+
+        while(!traversal_queue.empty()) {
+            const QueryCandidate current_query_node = traversal_queue.top(); 
+            traversal_queue.pop();
+
+	    //only analyse the node (going down in the tree) if it icludes the point or its min_dist is closer than the 
+	    // best possible value we have found so far in the worst case (min_max_dist)
+            if(current_query_node.min_dist < min_max_dist) { 
+                TreeNode & current_tree_node = m_search_tree[current_query_node.node_id];
+                //if the node is a leaf compare all its edges to find the closest one
+                if (current_tree_node.child_is_on_disk) {
+                    LeafNode current_leaf_node;
+                    LoadLeafFromDisk(current_tree_node.children[0], current_leaf_node);
+                    for(uint32_t i = 0; i < current_leaf_node.object_count; ++i) {
+                        DataT & current_edge = current_leaf_node.objects[i];
+                        if(ignore_tiny_components && current_edge.belongsToTinyComponent) {
+                            continue;
+                        }
+                        if(current_edge.isIgnored()) {
+                            continue;
+                        }
+
+                       double current_ratio = 0.;
+                       double current_perpendicular_distance = ComputePerpendicularDistance(
+                                input_coordinate,
+                                FixedPointCoordinate(current_edge.lat1, current_edge.lon1),
+                                FixedPointCoordinate(current_edge.lat2, current_edge.lon2),
+                                nearest,
+                                &current_ratio
+                        );
+
+                        if(
+                                current_perpendicular_distance < min_max_dist
+                                && !DoubleEpsilonCompare(
+                                        current_perpendicular_distance,
+                                        min_max_dist
+                                )
+                        ) { //found a new minimum
+                            min_max_dist = current_perpendicular_distance;
+                            result_phantom_node.edgeBasedNode = current_edge.id;
+                            result_phantom_node.nodeBasedEdgeNameID = current_edge.nameID;
+                            result_phantom_node.weight1 = current_edge.weight;
+                            result_phantom_node.weight2 = INT_MAX;
+                            result_phantom_node.location = nearest;
+                            current_start_coordinate.lat = current_edge.lat1;
+                            current_start_coordinate.lon = current_edge.lon1;
+                            current_end_coordinate.lat = current_edge.lat2;
+                            current_end_coordinate.lon = current_edge.lon2;
+                            nearest_edge = current_edge;
+                            found_a_nearest_edge = true;
+                        } else if(
+                                DoubleEpsilonCompare(current_perpendicular_distance, min_max_dist) &&
+                                1 == abs(current_edge.id - result_phantom_node.edgeBasedNode )
+                        && CoordinatesAreEquivalent(
+                                current_start_coordinate,
+                                FixedPointCoordinate(
+                                        current_edge.lat1,
+                                        current_edge.lon1
+                                ),
+                                FixedPointCoordinate(
+                                        current_edge.lat2,
+                                        current_edge.lon2
+                                ),
+                                current_end_coordinate
+                            )
+                        ) {
+
+                            BOOST_ASSERT_MSG(current_edge.id != result_phantom_node.edgeBasedNode, "IDs not different");
+                            result_phantom_node.weight2 = current_edge.weight;
+                            if(current_edge.id < result_phantom_node.edgeBasedNode) {
+                                result_phantom_node.edgeBasedNode = current_edge.id;
+                                std::swap(result_phantom_node.weight1, result_phantom_node.weight2);
+                                std::swap(current_end_coordinate, current_start_coordinate);
+                            }
+                        }
+                    }
+                } else {
+                    //traverse children, prune if the upper bound for the best node found so far (min_max_dist) is smaller than local mindist
+                    for (uint32_t i = 0; i < current_tree_node.child_count; ++i) {
+                        const int32_t child_id = current_tree_node.children[i];
+                        TreeNode & child_tree_node = m_search_tree[child_id];
+                        RectangleT & child_rectangle = child_tree_node.minimum_bounding_rectangle;
+                        const double current_min_dist = child_rectangle.GetMinDist(input_coordinate);
+                        const double current_min_max_dist = child_rectangle.GetMinMaxDist(input_coordinate);
+ 
+ 						// the child is a candidate if it either includes the coordinate or its min dist is closer than the 
+ 						// best upper bound we have so far 
+                        if( current_min_dist < min_max_dist ) {
+	                        if( current_min_max_dist < min_max_dist ) {
+	                        	min_max_dist = current_min_max_dist;
+				}
+                         	traversal_queue.push(QueryCandidate(child_id, current_min_dist));
+                        }
+                    }
+                }
+            }
+        }
+
+        const double ratio = (found_a_nearest_edge ?
+            std::min(1., ApproximateDistance(current_start_coordinate,
+                result_phantom_node.location)/ApproximateDistance(current_start_coordinate, current_end_coordinate)
+                ) : 0
+            );
+        result_phantom_node.weight1 *= ratio;
+        if(INT_MAX != result_phantom_node.weight2) {
+            result_phantom_node.weight2 *= (1.-ratio);
+        }
+        result_phantom_node.ratio = ratio;
+
+        //Hack to fix rounding errors and wandering via nodes.
+        if(std::abs(input_coordinate.lon - result_phantom_node.location.lon) == 1) {
+            result_phantom_node.location.lon = input_coordinate.lon;
+        }
+        if(std::abs(input_coordinate.lat - result_phantom_node.location.lat) == 1) {
+            result_phantom_node.location.lat = input_coordinate.lat;
+        }
+
+        std::cout<<"Phantom node >>>"<<std::endl;
+        std::cout<<"\tfounded? "<<found_a_nearest_edge<<std::endl;
+        std::cout<<"\tinput: lat="<<input_coordinate.lat<<", lon="<<input_coordinate.lon<<std::endl;
+        std::cout<<"\tphantom: lat="<<result_phantom_node.location.lat<<", lon="<<result_phantom_node.location.lon<<std::endl;
+        std::cout<<"\tmin_max="<<min_max_dist<<std::endl;
+	std::cout<<"\tApproximateDistance="<<ApproximateDistance(input_coordinate, result_phantom_node.location)<<std::endl;
+        std::cout<<"Phantom node <<<"<<std::endl;
+
+
+        return found_a_nearest_edge;
+
+    }
+    
+    // end method changed holger
 
 private:
     inline void LoadLeafFromDisk(const uint32_t leaf_id, LeafNode& result_node) {
@@ -940,22 +1226,26 @@ private:
         } else {
             *r = mX;
         }
-        if(*r<=0.){
+//        if(*r<=0.){
+	if(*r<=0.5){
             nearest.lat = source.lat;
             nearest.lon = source.lon;
-            return ((b - y)*(b - y) + (a - x)*(a - x));
-//            return std::sqrt(((b - y)*(b - y) + (a - x)*(a - x)));
-        } else if(*r >= 1.){
+	return ApproximateDistance(source, inputPoint);
+//            return ((b - y)*(b - y) + (a - x)*(a - x));
+////            return std::sqrt(((b - y)*(b - y) + (a - x)*(a - x)));
+//        } else if(*r >= 1.){
+	} else {
             nearest.lat = target.lat;
             nearest.lon = target.lon;
-            return ((d - y)*(d - y) + (c - x)*(c - x));
-//            return std::sqrt(((d - y)*(d - y) + (c - x)*(c - x)));
+	return ApproximateDistance(target, inputPoint);
+//            return ((d - y)*(d - y) + (c - x)*(c - x));
+////            return std::sqrt(((d - y)*(d - y) + (c - x)*(c - x)));
         }
         // point lies in between
-        nearest.lat = p*COORDINATE_PRECISION;
-        nearest.lon = q*COORDINATE_PRECISION;
-//        return std::sqrt((p-x)*(p-x) + (q-y)*(q-y));
-        return (p-x)*(p-x) + (q-y)*(q-y);
+//        nearest.lat = p*COORDINATE_PRECISION;
+//        nearest.lon = q*COORDINATE_PRECISION;
+////        return std::sqrt((p-x)*(p-x) + (q-y)*(q-y));
+//        return (p-x)*(p-x) + (q-y)*(q-y);
     }
 
     inline bool CoordinatesAreEquivalent(const FixedPointCoordinate & a, const FixedPointCoordinate & b, const FixedPointCoordinate & c, const FixedPointCoordinate & d) const {
