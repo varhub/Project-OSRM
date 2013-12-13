@@ -910,53 +910,58 @@ private:
         thread_local_rtree_stream->read((char *)&result_node, sizeof(LeafNode));
     }
 
-    inline double ComputePerpendicularDistance(
-            const FixedPointCoordinate& inputPoint,
-            const FixedPointCoordinate& source,
-            const FixedPointCoordinate& target,
-            FixedPointCoordinate& nearest, double *r) const {
-        const double x = inputPoint.lat/COORDINATE_PRECISION;
-        const double y = inputPoint.lon/COORDINATE_PRECISION;
-        const double a = source.lat/COORDINATE_PRECISION;
-        const double b = source.lon/COORDINATE_PRECISION;
-        const double c = target.lat/COORDINATE_PRECISION;
-        const double d = target.lon/COORDINATE_PRECISION;
-        double p,q,mX,nY;
-        if(std::fabs(a-c) > std::numeric_limits<double>::epsilon() ){
-            const double m = (d-b)/(c-a); // slope
-            // Projection of (x,y) on line joining (a,b) and (c,d)
-            p = ((x + (m*y)) + (m*m*a - m*b))/(1. + m*m);
-            q = b + m*(p - a);
-        } else {
-            p = c;
-            q = y;
-        }
-        nY = (d*p - c*q)/(a*d - b*c);
-        mX = (p - nY*a)/c;// These values are actually n/m+n and m/m+n , we need
-        // not calculate the explicit values of m an n as we
-        // are just interested in the ratio
-        if(std::isnan(mX)) {
-            *r = (target == inputPoint) ? 1. : 0.;
-        } else {
-            *r = mX;
-        }
-        if(*r<=0.){
-            nearest.lat = source.lat;
-            nearest.lon = source.lon;
-            return ((b - y)*(b - y) + (a - x)*(a - x));
-//            return std::sqrt(((b - y)*(b - y) + (a - x)*(a - x)));
-        } else if(*r >= 1.){
-            nearest.lat = target.lat;
-            nearest.lon = target.lon;
-            return ((d - y)*(d - y) + (c - x)*(c - x));
-//            return std::sqrt(((d - y)*(d - y) + (c - x)*(c - x)));
-        }
-        // point lies in between
-        nearest.lat = p*COORDINATE_PRECISION;
-        nearest.lon = q*COORDINATE_PRECISION;
-//        return std::sqrt((p-x)*(p-x) + (q-y)*(q-y));
-        return (p-x)*(p-x) + (q-y)*(q-y);
-    }
+	// Clamped projection to line's range [source, target]
+	inline double ComputePerpendicularDistance(
+		const FixedPointCoordinate& inputPoint,
+		const FixedPointCoordinate& source,
+		const FixedPointCoordinate& target,
+		FixedPointCoordinate& nearest, double *r
+	) const {
+
+		const double c = ApproximateDistance(source, target);
+		const double b = ApproximateDistance(source, inputPoint);
+		const double a = ApproximateDistance(target, inputPoint);
+		const double csq = c*c;
+		const double bsq = b*b;
+		const double asq = a*a;
+
+		// check if the angel at the start point is bigger 90 deg
+		// if yes, the start point is the result
+		if (csq+bsq <= asq) {
+			nearest.lat = source.lat;
+			nearest.lon = source.lon;
+			*r=0.;
+			return b;
+		}
+		// check if the angel at the end point is bigger 90 deg
+		// if yes, the end point is the result
+		else if (csq+asq <= bsq) {
+			nearest.lat = target.lat;
+			nearest.lon = target.lon;
+			*r=1.;
+			return a;
+		}
+		// in any other case there is a projection of the input point to the line
+		// find that projection
+		else {
+			//h is the perpendicular distance 
+			const double h = (a+b-c)*(a-b+c)*(-a+b+c)*(a+b+c);
+			h = std::sqrt(h)/(2*c);
+			//ratio is the ofset/ration of the point from the start
+			*r = std::sqrt(bsq-(h*h));
+
+			//calculate the point
+			const double slat = source.lat/COORDINATE_PRECISION;
+			const double slon = source.lon/COORDINATE_PRECISION;
+			const double tlat = target.lat/COORDINATE_PRECISION;
+			const double tlon = target.lon/COORDINATE_PRECISION;
+
+			nearest.lat = (slat+((*r)*(tlat-slat)))*COORDINATE_PRECISION;
+			nearest.lon = (slon+((*r)*(tlon-slon)))*COORDINATE_PRECISION;
+
+			return h;
+		}
+	}
 
     inline bool CoordinatesAreEquivalent(const FixedPointCoordinate & a, const FixedPointCoordinate & b, const FixedPointCoordinate & c, const FixedPointCoordinate & d) const {
         return (a == b && c == d) || (a == c && b == d) || (a == d && b == c);
